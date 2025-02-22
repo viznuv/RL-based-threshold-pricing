@@ -1,49 +1,63 @@
-# Threshold Pricing Agent with Q-Learning
+# Dynamic Pricing Agent with REINFORCE
 
-This repository contains a simple implementation of a threshold pricing agent using the Q-learning algorithm.  The agent learns to set optimal threshold prices in a simulated environment to maximize rewards.
+This repository contains an implementation of a dynamic pricing agent using the REINFORCE algorithm (a policy gradient method) in a simulated environment with seasonality and competitor pricing.  The agent learns to set optimal prices to maximize revenue.
 
 ## Overview
 
-The core of this project is a custom OpenAI Gym environment (`ThresholdPricingEnv`) that simulates a single-product pricing scenario.  A customer has a "willingness to pay" (WTP), drawn from a uniform distribution. The agent sets a threshold price.  If the customer's WTP is greater than or equal to the threshold price, the agent receives the threshold price as a reward; otherwise, the reward is zero. The agent's goal is to learn the threshold prices that maximize its cumulative reward over time, given a fluctuating market demand (represented by the environment's state).
+This project features a custom OpenAI Gym environment (`DynamicPricingEnv`) that simulates a more realistic dynamic pricing scenario than the previous example.  The environment incorporates:
 
-The agent uses Q-learning to learn the optimal pricing strategy.  The state represents market demand, and the actions are discrete threshold prices (1 to 10).
+*   **Seasonality:** Customer willingness-to-pay (WTP) fluctuates according to a sinusoidal pattern, simulating seasonal demand changes.
+*   **Competitor Pricing:** A competitor also sets a dynamic price, influencing the agent's probability of making a sale.  The competitor's price also varies with seasonality and includes some random noise.
+*   **Continuous Action Space:** The agent chooses a price from a continuous range (0 to 20).
+*   **Continuous State Space:** The state includes the normalized time, a seasonality factor and the competitor's price.
 
-## Environment (`ThresholdPricingEnv`)
+The agent uses a neural network (implemented with PyTorch) to represent its policy, which is a Gaussian distribution over prices.  The REINFORCE algorithm is used to train the policy to maximize cumulative rewards.
 
-The `ThresholdPricingEnv` class defines the environment:
+## Environment (`DynamicPricingEnv`)
 
-*   **Action Space:**  Discrete(10).  Actions 0 through 9 correspond to threshold prices 1 through 10.
-*   **Observation Space:** Box(low=0, high=100, shape=(1,), dtype=np.float32). Represents the market demand (a single integer value).  In this implementation, the demand is randomly generated within the range [10, 50] at each step.
-*   **`reset()`:** Initializes the environment's state (market demand) to a random value between 10 and 50. Returns the initial state.
-*   **`step(action)`:**  Takes an action (threshold price index), simulates a customer's WTP, calculates the reward, updates the environment's state (new random demand), and returns the next state, reward, a `done` flag (always `False` in this continuous environment), and an empty info dictionary.
-*    **Reward:** If customer WTP >= threshold price then reward is threshold price else, no reward.
+The `DynamicPricingEnv` class defines the environment:
 
-## Q-Learning Implementation
+*   **Action Space:** `Box(low=0.0, high=20.0, shape=(1,), dtype=np.float32)`.  The agent's action is a continuous price between 0 and 20.
+*   **Observation Space:** `Box(low=[0.0, -1.0, 0.0], high=[1.0, 1.0, 20.0], shape=(3,), dtype=np.float32)`. The state is a 3-dimensional vector:
+    *   `normalized_time`:  The current time step normalized to the range [0, 1].
+    *   `seasonal_factor`:  A value between -1 and 1 representing the seasonal influence on WTP.
+    *   `competitor_price`: The current price set by the competitor.
+*   **`reset()`:** Resets the environment to the initial state (time step 0).  Calculates the initial seasonal factor and competitor price.
+*   **`step(action)`:**
+    *   Takes the agent's chosen price (a continuous value).
+    *   Calculates the customer's WTP, considering the seasonal factor.
+    *   Determines the probability of a sale based on the agent's price, the customer's WTP, and the competitor's price.  A lower price relative to the competitor increases the sale probability.
+    *   Calculates the reward (the agent's price if a sale occurs, 0 otherwise).
+    *   Updates the environment's state (advances time, calculates the new seasonal factor and competitor price).
+    *   Returns the next state, reward, `done` flag (True when the episode reaches `max_steps`), and an empty info dictionary.
+*   **`_get_seasonality(step)`:** Calculates the seasonal factor using a sine function.
+*   **`_get_competitor_price(step)`:**  Calculates the competitor's price, which includes a base price, a seasonal component, and random noise.
 
-The script implements a basic Q-learning algorithm:
+## Policy Network (`PolicyNetwork`)
 
-1.  **Initialization:** A Q-table is initialized to zeros.  The Q-table has dimensions (number of possible states) x (number of possible actions). The state is discretized for use as an index into the Q-table.
-2.  **Hyperparameters:**
-    *   `alpha`: Learning rate (0.1)
-    *   `gamma`: Discount factor (0.95)
-    *   `epsilon`: Exploration rate (0.1)
-    *   `episodes`: Number of training episodes (500)
-    *   `steps_per_episode`: Maximum steps per episode (100)
-3.  **Training Loop:**
-    *   The environment is reset at the beginning of each episode.
-    *   For each step in the episode:
-        *   An action is selected using an epsilon-greedy policy (explore with probability `epsilon`, otherwise choose the action with the highest Q-value).
-        *   The `step()` function of the environment is called with the chosen action.
-        *   The Q-value for the current state-action pair is updated using the Q-learning update rule:
-            ```
-            Q(s, a) = Q(s, a) + alpha * (reward + gamma * max(Q(s', a')) - Q(s, a))
-            ```
-            where `s` is the current state, `a` is the current action, `s'` is the next state, and `a'` is the action that maximizes the Q-value in the next state.
-        *   The current state is updated to the next state.
-        *   The total reward for the episode is accumulated.
-    *   The total reward per episode is stored for plotting.
-    *   Progress is printed every 50 episodes.
-4.  **Visualization:** After training, a plot of the total reward per episode is displayed, showing the learning progress.
+The `PolicyNetwork` class (a PyTorch `nn.Module`) defines the agent's policy:
+
+*   **Input:**  A state vector (3-dimensional).
+*   **Output:**  A `torch.distributions.Normal` object representing a Gaussian distribution over prices.  The network outputs the mean and (log) standard deviation of this distribution.
+*   **Architecture:**  A simple feedforward network with two hidden layers (ReLU activations) and two output heads: one for the mean and one for the log standard deviation. The log standard deviation is a learnable parameter.
+*    **Forward Pass:** The `forward` method takes a state tensor as input and returns the normal distribution.
+
+## REINFORCE Algorithm
+
+The `train()` function implements the REINFORCE algorithm:
+
+1.  **Initialization:**  Creates the environment, policy network, and optimizer (Adam).
+2.  **Training Loop (Episodes):**
+    *   **Rollout:** For each episode:
+        *   Reset the environment.
+        *   Collect a trajectory (sequence of states, actions, log probabilities, and rewards) by interacting with the environment. The policy network is used to sample actions from the Gaussian distribution defined by its output.
+        *   Calculate the discounted cumulative rewards (returns) for each time step.
+    *   **Policy Update:**
+        *   Calculate the policy loss.  The loss is the negative sum of the log probabilities of the taken actions, weighted by the corresponding discounted returns.
+        *   Perform backpropagation to compute the gradients of the loss with respect to the policy network's parameters.
+        *   Update the policy network's parameters using the optimizer.
+    *   **Logging:** Store and print the total reward for each episode.
+3.  **Visualization:** After training, plot the total reward per episode.
 
 ## Getting Started
 
@@ -51,7 +65,9 @@ The script implements a basic Q-learning algorithm:
     *   Python 3.6+
     *   NumPy
     *   Gym (`pip install gym`)
+    *   PyTorch (`pip install torch`)
     *   Matplotlib
+    *   Unittest
 
 2.  **Clone the repository:**
 
@@ -64,27 +80,25 @@ The script implements a basic Q-learning algorithm:
 3.  **Run the script:**
 
     ```bash
-    python threshold_pricing.py
+    python dynamic_pricing.py
     ```
 
-    This will train the Q-learning agent and display a plot of the total reward per episode.
+    This will train the REINFORCE agent and display a plot of the total reward per episode.  You can run the unit tests by uncommenting the `unittest.main()` lines.
 
 ## Key Concepts and Improvements
 
-*   **Threshold Pricing:**  This code demonstrates a simplified version of threshold pricing.  Real-world applications might involve more complex demand models, competitor pricing, and dynamic pricing strategies.
-*   **Q-Learning:** The core reinforcement learning algorithm. The agent learns a Q-function that estimates the expected cumulative reward for each state-action pair.
-*   **Exploration vs. Exploitation:** The epsilon-greedy strategy balances exploration (trying random actions) and exploitation (choosing the action believed to be best).
-*   **State Discretization:** The continuous state space (market demand) is discretized into integer values to be used as indices in the Q-table.  This is a common technique when using Q-learning with continuous states.
-*   **Continuous vs. Episodic:** The environment is set up as continuous (no `done` signal).  You could modify it to be episodic (e.g., ending after a certain number of steps or when a certain condition is met).
+*   **Dynamic Pricing:** This code demonstrates a more complex dynamic pricing scenario, including seasonality and competitor pricing.
+*   **REINFORCE (Policy Gradient):**  A policy gradient method that directly optimizes the policy (represented by the neural network) by estimating the gradient of the expected cumulative reward.
+*   **Gaussian Policy:**  The policy is a Gaussian distribution, allowing for continuous actions.
+*   **Competitor Model:**  The competitor's pricing strategy adds another layer of complexity to the environment.
+*   **Seasonality:** The sinusoidal seasonality factor adds a realistic dynamic to the customer's WTP.
 
 *   **Possible Improvements:**
-    *   **More Realistic Demand Model:** Instead of uniform random demand, use a more sophisticated model (e.g., based on historical data, seasonality, or external factors).
-    *   **Competitor Pricing:** Introduce competitor agents or a model of competitor pricing.
-    *   **Dynamic Pricing:** Explore more advanced dynamic pricing strategies beyond simple threshold pricing.
-    *   **Function Approximation:** For larger state spaces, use function approximation (e.g., neural networks) instead of a Q-table.  This would allow for handling truly continuous states without discretization. Libraries like TensorFlow or PyTorch would be useful here.
-    *   **Policy Gradient Methods:** Consider alternative reinforcement learning algorithms, such as policy gradient methods (e.g., REINFORCE, A2C, PPO).
-    *    **Parameter Tuning:** Tune hyperparameters.
-    *   **Add Tests:** Add unit tests for the environment and Q-learning algorithm.
-    *   **Varying Customer WTP distribution:** The customer WTP is currently drawn from U(1,10), you can change that.
+    *   **More Realistic Models:** Use more sophisticated models for customer WTP and competitor behavior (e.g., incorporating historical data, price elasticity, or different customer segments).
+    *   **Advanced Policy Gradient Methods:**  Experiment with more advanced policy gradient algorithms like A2C, PPO, or DDPG, which often offer better sample efficiency and stability than REINFORCE.
+    *   **Hyperparameter Tuning:**  Systematically tune hyperparameters (learning rate, discount factor, network architecture, etc.) using techniques like grid search or Bayesian optimization.
+    *   **Exploration Strategies:** Implement more sophisticated exploration strategies (e.g., entropy regularization) to encourage the agent to explore a wider range of actions.
+    *   **Recurrent Neural Networks (RNNs):** Consider using RNNs (like LSTMs) in the policy network to handle potential temporal dependencies in the state (e.g., if past competitor prices are important).
+    * **Batching** Improve training by processing episodes in batches.
 
-This README provides a comprehensive overview of the code, explains how to run it, and suggests potential improvements.  It is suitable for use on GitHub to document the project.
+This comprehensive README explains the code, its functionality, how to run it, and potential improvements. It's suitable for a GitHub repository. The unit tests included provide a basic level of code verification.
