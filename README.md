@@ -4,7 +4,7 @@ This repository contains an implementation of a dynamic pricing agent using the 
 
 ## Overview
 
-This project features a custom OpenAI Gym environment (`DynamicPricingEnv`) that simulates a more realistic dynamic pricing scenario than the previous example.  The environment incorporates:
+This project features a custom OpenAI Gym environment (`RL-based-threshold-pricing`) that simulates a more realistic dynamic pricing scenario than the previous example.  The environment incorporates:
 
 *   **Seasonality:** Customer willingness-to-pay (WTP) fluctuates according to a sinusoidal pattern, simulating seasonal demand changes.
 *   **Competitor Pricing:** A competitor also sets a dynamic price, influencing the agent's probability of making a sale.  The competitor's price also varies with seasonality and includes some random noise.
@@ -80,7 +80,7 @@ The `train()` function implements the REINFORCE algorithm:
 3.  **Run the script:**
 
     ```bash
-    python dynamic_pricing.py
+    python RL-based-threshold-pricing.py
     ```
 
     This will train the REINFORCE agent and display a plot of the total reward per episode.  You can run the unit tests by uncommenting the `unittest.main()` lines.
